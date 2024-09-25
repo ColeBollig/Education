@@ -1,6 +1,6 @@
-#CS640 Programming Assignment 1: Distributed File Transfer
+# CS640 Programming Assignment 1: Distributed File Transfer
 
-Due: *Oct 15, 2024*
+Due: **Oct 15, 2024**
 
 ## Description
 For this programming assignment you will write two pieces of code: the "sender" and the "requester". The sender will chunk a requested file and send each file chunk via UDP packets to the requester. The requester will receive these packets, subsequently write it to a file and print receipt information. The file transfer is distributed meaning that the requester may need to connect to different senders to get parts of the file and then assemble these parts to get the whole file. The code must be written in Python3 and must be able to run on the CSL Linux machines. Your code should be able to run both on a single host and on several different hosts.
@@ -14,9 +14,11 @@ The packets which will be sent are to be of the form:
 
 Valid values for packet type are:
 
+```
 'R' (uppercase R), meaning Request packet
 'D' (uppercase D), meaning DATA packet
 'E' (uppercase E), meaning END packet
+```
 
 ### Sequence number
 
@@ -35,7 +37,7 @@ The requester fills the payload field with the name of the file that it is reque
 Tracker
 The tracker is a file (called tracker.txt) that is located in the same folder that the requester resides so that the requester can access it directly. The tracker includes a table that will give the requester enough information to retrieve the file. The table will have the following columns:
 
-*Filename, ID, Sender_hostname, Sender_port, Size*
+**Filename, ID, Sender_hostname, Sender_port, Size**
 
 The first column is the file name.
 The ID specifies the sequence at which the file parts should be retrieved. For example, the requester should first contact the sender that has ID 1 for the specific file, and then move to the sender that has ID 2 for that file.
