@@ -26,18 +26,18 @@ Valid values for packet type are:
 * For the sender, the sequence number can start at any arbitrary value, as specified by the user in the parameters. The sequence value should increment with the number of "payload" bytes sent during a test. It should not include the 9 bytes required for the header in the packet layout shown above.
 * For Request packets, the sequence field is set to 0.
 
-###Length
+### Length
 
 * The length field is unsigned and specifies the number of bytes carried in the "payload" of the packet.
 * In case the packet type is a request, the packet length should be set to 0.
 
-###Payload
+### Payload
 
 * The payload data is chunks from the file that the requester has requested. The sender chunks the file part that it has to payloads of the size that is identified by the length field in its parameters (see below) and sends them to the requester. The last chunk can be of the size less than the length parameter based on how many bytes are left in the file.
 * There is no limit on the max size of the payload length.
 * The requester fills the payload field with the name of the file that it is requesting.
 
-##Tracker
+## Tracker
 
 The tracker is a file (called tracker.txt) that is located in the same folder that the requester resides so that the requester can access it directly. The tracker includes a table that will give the requester enough information to retrieve the file. The table will have the following columns:
 
@@ -71,7 +71,7 @@ Each sender will have a copy of the file parts that it is responsible for in the
 * seq_no is the initial sequence of the packet exchange,
 * length is the length of the payload (in bytes) in the packets.
 
-###Additional notes for the parameters:
+### Additional notes for the parameters:
 
 * sender and requester port should be in this range: 2049 < port < 65536
 * for implementing the rate parameter the sending interval should be evenly distributed, i.e. when the rate is 10 packets per second the sender has to send one packet at about every 100 milliseconds. It should not send them all in a short time and wait for the remaining time in the second.
