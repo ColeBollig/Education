@@ -14,28 +14,38 @@ __email__ = "cabollig@wisc.edu"
 
 TRACKER_FILE = "tracker.txt"
 
+#------------------------------------------------------------------
 def now():
+    """Get timestamp in milliseconds"""
     return time() * 1000
 
+#------------------------------------------------------------------
+# Class that represents a remote host (Sender)
 class Host:
     def __init__(self, hostname, port, size):
         self.hostname = hostname
         self.host = socket.gethostbyname(hostname)
         self.port = int(port)
         self.size = int(size)
+    # Allow conversion to string for debugging
     def __str__(self) -> str:
         return f"{self.hostname}({self.host}:{self.port}) | {self.size}"
+    # Return a socket address tuple (IP, Port)
     def addr(self) -> tuple:
         return (self.host, self.port)
 
+#------------------------------------------------------------------
+# Class representing a Packet
 class Packet:
     def __init__(self, **kwargs):
         self.type = kwargs.get("type", b'-')
         self.payload = kwargs.get("payload", "")
         self.seq = kwargs.get("sequence", 0)
         self.len = 0 if self.type != b'D' else len(self.payload)
+    # Encode a the packet to transmit over the network
     def encode(self):
         return struct.pack("!cII", self.type, socket.htonl(self.seq), socket.htonl(self.len)) + self.payload.encode()
+    # Decode a transmitted network packet
     def decode(self, data):
         header = data[:9]
         self.payload = data[9:].decode()
@@ -43,12 +53,16 @@ class Packet:
         self.type = header[0]
         self.seq = socket.ntohl(header[1])
         self.len = socket.ntohl(header[2])
+    # Allow string conversion for debugging
     def __str__(self):
         return f"[{str(self.type)}|{self.seq}|{len(self.payload)}|'{self.payload}']"
+    # Return full Packet type name from single character representation
     def type_str(self):
         PACKET_TYPES = {b'R' : "REQUEST", b'D' : "DATA", b'E' : "END"}
         return PACKET_TYPES.get(self.type, "UNKNOWN")
 
+#------------------------------------------------------------------
+# Class to collect data transfer information from remote sender
 class Summary:
     def __init__(self, host, port, expected):
         self.host = host
@@ -59,13 +73,17 @@ class Summary:
         self.num_data_packets = 0
         self.bytes_rec = 0
         self.bytes_expected = expected
+    # Count bytes recieved from sender and increment number of recieved data packets
     def count(self, b: int):
         self.num_data_packets += 1
         self.bytes_rec += b
+    # Mark that sender sent END packet
     def finished(self):
         self.end_t = now()
+    # Return the percent of bytes recieved from sender
     def percent(self):
         return (self.bytes_rec / self.bytes_expected) * 100
+    # Convert to string to display summary output
     def __str__(self):
         total_t = self.end_t - self.start_t
         packets_per_sec = round(self.num_data_packets / (total_t / 1000))
@@ -78,29 +96,43 @@ f"""SUMMARY
     Test Duration--------: {total_t:.2f} ms
 """)
 
+#------------------------------------------------------------------
 def request_files(args, tracker):
+    """Retrieve requested files from senders"""
+    # setup socket
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     sock.settimeout(args.timeout)
     sock.bind(('', args.my_port))
 
+    # Retrieve each specified file
     for filename in args.files:
         f = open(filename, "w")
+        # Create request packet to send to each Sender
         request = Packet(type=b'R', payload=filename)
+        # For each sender in order
         for sender in tracker[filename].values():
             result = None
+            # Send request for sender
             sock.sendto(request.encode(), sender.addr())
+            # Listen on socket for DATA->END packets
             while True:
                 percentage = ""
                 packet = Packet()
+                # Recieve a packet
                 data, host = sock.recvfrom(10240)
                 if result is None:
+                    # Set up Summary once first packet is recieved
                     result = Summary(host[0], host[1], sender.size)
                 recieve_t = datetime.now().strftime('%Y-%m-%d %H:%M:%S.%f')[:22]
+                # Decode tramsmitted network packet
                 packet.decode(data)
+                # Count DATA packet bytes
                 if packet.type == b'D':
                     result.count(packet.len)
                     percentage = f"\n    Data Recieved---: {result.percent():.2f}%"
-                f.write(packet.payload)
+                    # Write retrieved DATA to local file
+                    f.write(packet.payload)
+                # Print retrieved packet information
                 print(
 f"""{packet.type_str()} Packet
     Recieve Time----: {recieve_t}
@@ -109,21 +141,26 @@ f"""{packet.type_str()} Packet
     Length----------: {packet.len}
     Payload (4B)----: '{packet.payload[:4]}'{percentage}
 """)
+                # Check if end packet to stop listening for this sender
                 if packet.type == b'E':
                     result.finished()
                     break
+            # Output summary of retrieved data from sender
             print(f"{result}")
         f.close()
     sock.close()
-    return
 
+#------------------------------------------------------------------
 def get_tracking_info():
+    """Parse tracker file for where to make requests for files"""
+    # Check if the tracker file exists locally (fail if not)
     if not os.path.exists(TRACKER_FILE):
         print(f"Error: File tracking file '{TRACKER_FILE}' not found near requester.py")
         sys.exit(1)
 
     TRACKER = dict()
 
+    # Read the tracker file
     with open(TRACKER_FILE, "r") as f:
         for line in f:
             filename, ID, hostname, port, size = line.strip().split(" ")
@@ -144,6 +181,7 @@ def get_tracking_info():
 
     return TRACKER
 
+#------------------------------------------------------------------
 def parse_args():
     """Function to handle all CLI argument parsing"""
 
@@ -199,7 +237,9 @@ def parse_args():
 
     return parser.parse_args()
 
+#------------------------------------------------------------------
 def check_args(args, tracker):
+    """Verify provided arguments are valid"""
     invalid_args = False
 
     if args.my_port <= 2049 or args.my_port >= 65536:
@@ -214,6 +254,7 @@ def check_args(args, tracker):
     if invalid_args:
         sys.exit(1)
 
+#------------------------------------------------------------------
 def main():
     args = parse_args()
     tracker = get_tracking_info()

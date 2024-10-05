@@ -12,14 +12,18 @@ import textwrap
 __author__ = "Cole Bollig"
 __email__ = "cabollig@wisc.edu"
 
+#------------------------------------------------------------------
+# Class representing a Packet
 class Packet:
     def __init__(self, **kwargs):
         self.type = kwargs.get("type", b'-')
         self.payload = kwargs.get("payload", "")
         self.seq = kwargs.get("sequence", 0)
         self.len = 0 if self.type != b'D' else len(self.payload)
+    # Encode the Packet to transmit over network
     def encode(self):
         return struct.pack("!cII", self.type, socket.htonl(self.seq), socket.htonl(self.len)) + self.payload.encode()
+    # Decode a transmitted network packet
     def decode(self, data):
         header = data[:9]
         self.payload = data[9:].decode()
@@ -27,45 +31,62 @@ class Packet:
         self.type = header[0]
         self.seq = socket.ntohl(header[1])
         self.len = socket.ntohl(header[2])
+    # Allow conversion into a string type for debugging
     def __str__(self):
         return f"[{self.type}|{self.seq}|{len(self.payload)}|'{self.payload}']"
+    # Return full Packet type name from single character representation
     def type_str(self):
         PACKET_TYPES = {b'R' : "REQUEST", b'D' : "DATA", b'E' : "END"}
         return PACKET_TYPES.get(self.type, "UNKNOWN")
 
+#------------------------------------------------------------------
 def now():
+    """Get timestamp in milliseconds"""
     return time() * 1000
 
+#------------------------------------------------------------------
 def handle_requests(args):
+    """Wait and handle for an incoming request for a file"""
+    # Setup socket
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     sock.settimeout(args.timeout)
     sock.bind(('', args.my_port))
 
+    # Variables to manage request information
     requester = None
     request = Packet()
 
+    # Wait for a valid request packet
     while True:
         data, requester = sock.recvfrom(10240)
         request.decode(data)
         if request.type == b'R':
             break
 
+    # Variables for sending DATA packets back to requester
     host = (requester[0], int(args.requester_port))
     seq = args.sequence_no
     delay = 1000 / args.rate
     last_packet_t = 0
 
+    # Verify requested file exists locally
     if os.path.exists(request.payload):
         with open(request.payload, "r") as f:
+            # Read requested file and send in packets
             while True:
+                # Delay in between packets for packet rate limiting
                 while now() - last_packet_t < delay:
                     pass
+                # Read specified # bytes from file
                 data = f.read(args.length)
+                # If no bytes read then we are done... break out of loop
                 if not data:
                     break
+                # Create packet, encode, and send over network
                 packet = Packet(type=b'D', sequence=seq, payload=data)
                 sock.sendto(packet.encode(), host)
                 send_t = datetime.now().strftime('%Y-%m-%d %H:%M:%S.%f')[:22]
+                # Display send DATA packet information
                 print(
 f"""{packet.type_str()} Packet
     Send Time-------: {send_t}
@@ -76,11 +97,14 @@ f"""{packet.type_str()} Packet
                 seq += packet.len
                 last_packet_t = now()
     else:
+        # Requested file not found locally
         print(f"Error: File '{request.payload}' requested from {requester[0]}:{requester[1]} not found!")
 
+    # Create final END packet, encode, and send over network
     packet = Packet(type=b'E', sequence=seq)
     sock.sendto(packet.encode(), host)
     send_t = datetime.now().strftime('%Y-%m-%d %H:%M:%S.%f')[:22]
+    # Dsiplay END packet information
     print(
 f"""{packet.type_str()} Packet
     Send Time-------: {send_t}
@@ -91,6 +115,7 @@ f"""{packet.type_str()} Packet
 
     sock.close()
 
+#------------------------------------------------------------------
 def parse_args():
     """Function to handle all CLI argument parsing"""
 
@@ -179,7 +204,9 @@ def parse_args():
 
     return parser.parse_args()
 
+#------------------------------------------------------------------
 def check_args(args):
+    """Verify provided arguments are valid"""
     invalid_args = False
     if args.rate <= 0:
         print(f"Error: Invalid packet rate ({args.rate}) sepcified. Must be a non-zero positive integer")
@@ -204,6 +231,7 @@ def check_args(args):
     if invalid_args:
         sys.exit(1)
 
+#------------------------------------------------------------------
 def main():
     args = parse_args()
     check_args(args)
