@@ -38,6 +38,7 @@ def now():
 
 def handle_requests(args):
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    sock.settimeout(args.timeout)
     sock.bind(('', args.my_port))
 
     requester = None
@@ -163,6 +164,17 @@ def parse_args():
         type=int,
         default=0,
         help="The initial sequence of the packet exchange",
+    )
+
+    parser.add_argument(
+        "-t",
+        "--timeout",
+        metavar="<sec>",
+        dest="timeout",
+        action="store",
+        type=int,
+        default=None,
+        help="Socket timeout value if specified else None",
     )
 
     return parser.parse_args()

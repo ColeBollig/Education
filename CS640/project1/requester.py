@@ -80,6 +80,7 @@ f"""SUMMARY
 
 def request_files(args, tracker):
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    sock.settimeout(args.timeout)
     sock.bind(('', args.my_port))
 
     for filename in args.files:
@@ -183,6 +184,17 @@ def parse_args():
         action="append",
         required=True,
         help="File to request from senders",
+    )
+
+    parser.add_argument(
+        "-t",
+        "--timeout",
+        metavar="<sec>",
+        dest="timeout",
+        action="store",
+        type=int,
+        default=None,
+        help="Socket timeout value if specified else None",
     )
 
     return parser.parse_args()
