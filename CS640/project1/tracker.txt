@@ -3,3 +3,4 @@ data.txt 5 Coles-MacBook-Pro.local 9001 4524B
 data.txt 2 Coles-MacBook-Pro.local 6001 1665B
 data.txt 4 Coles-MacBook-Pro.local 8001 4182B
 data.txt 3 Coles-MacBook-Pro.local 7001 148B
+remote.txt 1 Coles-MacBook-Pro-2.local 9876 6133B
