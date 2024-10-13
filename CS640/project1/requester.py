@@ -163,7 +163,14 @@ def get_tracking_info():
     # Read the tracker file
     with open(TRACKER_FILE, "r") as f:
         for line in f:
-            filename, ID, hostname, port, size = line.strip().split(" ")
+            line = line.strip()
+            if line == "" or line[0] == "#":
+                continue
+            try:
+                filename, ID, hostname, port, size = line.strip().split(" ")
+            except Exception as e:
+                print(f"Error: Failed to parse {TRACKER_FILE}: {e}")
+                sys.exit(1)
             #print(f"Parsed: '{filename}' '{ID}' '{hostname}' '{port}' '{size}'")
             if filename in TRACKER:
                 if ID in TRACKER[filename]:
