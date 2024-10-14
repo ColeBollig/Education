@@ -27,6 +27,8 @@ class Host:
         self.host = socket.gethostbyname(hostname)
         self.port = int(port)
         self.size = int(size)
+        if self.port <= 2049 or self.port >= 65536:
+            raise RuntimeError(f"Invalid port number ({self.port}). Out of range 2049 < p < 65536")
     # Allow conversion to string for debugging
     def __str__(self) -> str:
         return f"{self.hostname}({self.host}:{self.port}) | {self.size}"
@@ -133,13 +135,14 @@ def request_files(args, tracker):
                     # Write retrieved DATA to local file
                     f.write(packet.payload)
                 # Print retrieved packet information
+                four_bytes = packet.payload[:4].replace("\n", "\\n")
                 print(
 f"""{packet.type_str()} Packet
     Recieve Time----: {recieve_t}
     Sender Address--: {host[0]}:{host[1]}
     Sequence Number-: {packet.seq}
     Length----------: {packet.len}
-    Payload (4B)----: '{packet.payload[:4]}'{percentage}
+    Payload (4B)----: '{four_bytes}'{percentage}
 """)
                 # Check if end packet to stop listening for this sender
                 if packet.type == b'E':
@@ -162,24 +165,25 @@ def get_tracking_info():
 
     # Read the tracker file
     with open(TRACKER_FILE, "r") as f:
+        line_no = 0
         for line in f:
+            line_no += 1
             line = line.strip()
             if line == "" or line[0] == "#":
                 continue
             try:
                 filename, ID, hostname, port, size = line.strip().split(" ")
+                #print(f"Parsed: '{filename}' '{ID}' '{hostname}' '{port}' '{size}'")
+                if filename in TRACKER:
+                    if ID in TRACKER[filename]:
+                        raise RuntimeError(f"ID {ID} specified multiple times")
+                else:
+                    TRACKER[filename] = dict()
+                file_portion = { ID : Host(hostname, port, size.replace("B", "")) }
+                TRACKER[filename].update(file_portion)
             except Exception as e:
-                print(f"Error: Failed to parse {TRACKER_FILE}: {e}")
+                print(f"Error: Failed to parse {TRACKER_FILE} (@{line_no}): {e}")
                 sys.exit(1)
-            #print(f"Parsed: '{filename}' '{ID}' '{hostname}' '{port}' '{size}'")
-            if filename in TRACKER:
-                if ID in TRACKER[filename]:
-                    print(f"Error: Invalid tracking information. ID {ID} specified multiple times")
-                    sys.exit(1)
-            else:
-                TRACKER[filename] = dict()
-            file_portion = { ID : Host(hostname, port, size.replace("B", "")) }
-            TRACKER[filename].update(file_portion)
 
     # Sort per file sender sequence for further use
     for filename, info in TRACKER.items():
@@ -193,7 +197,7 @@ def parse_args():
     """Function to handle all CLI argument parsing"""
 
     parser = argparse.ArgumentParser(
-        prog="sender.py",
+        prog="requester.py",
         description=textwrap.dedent(
             f"""
             UW-Madison CS640 Fall 2024
@@ -204,7 +208,7 @@ def parse_args():
                 reach out to Sender programs (in order) to
                 retrieve specified files. Files and what senders
                 to request portions from is specified in
-                tracker.txt.
+                {TRACKER_FILE}.
             """
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,

@@ -87,12 +87,13 @@ def handle_requests(args):
                 sock.sendto(packet.encode(), host)
                 send_t = datetime.now().strftime('%Y-%m-%d %H:%M:%S.%f')[:22]
                 # Display send DATA packet information
+                four_bytes = packet.payload[:4].replace("\n", "\\n")
                 print(
 f"""{packet.type_str()} Packet
     Send Time-------: {send_t}
     Request Address-: {host[0]}:{host[1]}
     Sequence Number-: {seq}
-    Payload (4B)----: '{packet.payload[:4]}'
+    Payload (4B)----: '{four_bytes}'
 """)
                 seq += packet.len
                 last_packet_t = now()
