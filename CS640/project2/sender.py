@@ -3,9 +3,7 @@
 import sys
 import os
 import socket
-import struct
-from time import time
-from datetime import datetime
+from networking import *
 import argparse
 import textwrap
 
@@ -13,106 +11,125 @@ __author__ = "Cole Bollig"
 __email__ = "cabollig@wisc.edu"
 
 #------------------------------------------------------------------
-# Class representing a Packet
-class Packet:
-    def __init__(self, **kwargs):
-        self.type = kwargs.get("type", b'-')
-        self.payload = kwargs.get("payload", "")
-        self.seq = kwargs.get("sequence", 0)
-        self.len = 0 if self.type != b'D' else len(self.payload)
-    # Encode the Packet to transmit over network
-    def encode(self):
-        return struct.pack("!cII", self.type, socket.htonl(self.seq), socket.htonl(self.len)) + self.payload.encode()
-    # Decode a transmitted network packet
-    def decode(self, data):
-        header = data[:9]
-        self.payload = data[9:].decode()
-        header = struct.unpack("!cII", header)
-        self.type = header[0]
-        self.seq = socket.ntohl(header[1])
-        self.len = socket.ntohl(header[2])
-    # Allow conversion into a string type for debugging
-    def __str__(self):
-        return f"[{self.type}|{self.seq}|{len(self.payload)}|'{self.payload}']"
-    # Return full Packet type name from single character representation
-    def type_str(self):
-        PACKET_TYPES = {b'R' : "REQUEST", b'D' : "DATA", b'E' : "END"}
-        return PACKET_TYPES.get(self.type, "UNKNOWN")
-
-#------------------------------------------------------------------
-def now():
-    """Get timestamp in milliseconds"""
-    return time() * 1000
+def create_packet(f, size: int, seq: int) -> Packet:
+    """Parse file to create a data packets"""
+    data = f.read(size)
+    return None if not data else Packet(type=P_DATA, payload=data, sequence=seq)
 
 #------------------------------------------------------------------
 def handle_requests(args):
     """Wait and handle for an incoming request for a file"""
     # Setup socket
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    sock.settimeout(args.timeout)
+    sock.settimeout(args.socket_timeout)
     sock.bind(('', args.my_port))
 
     # Variables to manage request information
     requester = None
-    request = Packet()
+    request = None
 
     # Wait for a valid request packet
     while True:
         data, requester = sock.recvfrom(10240)
-        request.decode(data)
-        if request.type == b'R':
+        frame = Frame(data=data)
+        request = frame.getPacket()
+        if request.type == P_REQUEST:
             break
 
+    sock.setblocking(False)
+
     # Variables for sending DATA packets back to requester
-    host = (requester[0], int(args.requester_port))
-    seq = args.sequence_no
-    delay = 1000 / args.rate
+    local = get_local_host(args.my_port)
+    forward_addr = (socket.gethostbyname(args.forward_host), args.forward_port)
+    dest = (requester[0], int(args.requester_port))
+    sent_packets = 0
+    dropped_packets = 0
     last_packet_t = 0
+    seq = 0
 
     # Verify requested file exists locally
     if os.path.exists(request.payload):
         with open(request.payload, "r") as f:
-            # Read requested file and send in packets
-            while True:
-                # Delay in between packets for packet rate limiting
-                while now() - last_packet_t < delay:
-                    pass
-                # Read specified # bytes from file
-                data = f.read(args.length)
-                # If no bytes read then we are done... break out of loop
-                if not data:
+            window = {}
+            # Parse initial window packets (up to window size)
+            for i in range(request.len):
+                seq += 1
+                packet = create_packet(f, args.length, seq)
+                if packet is not None:
+                    window[seq] = (packet, 0, 0, False)
+                else:
                     break
-                # Create packet, encode, and send over network
-                packet = Packet(type=b'D', sequence=seq, payload=data)
-                sock.sendto(packet.encode(), host)
-                send_t = datetime.now().strftime('%Y-%m-%d %H:%M:%S.%f')[:22]
-                # Display send DATA packet information
-                four_bytes = packet.payload[:4].replace("\n", "\\n")
-                print(
-f"""{packet.type_str()} Packet
-    Send Time-------: {send_t}
-    Request Address-: {host[0]}:{host[1]}
-    Sequence Number-: {seq}
-    Payload (4B)----: '{four_bytes}'
-""")
-                seq += packet.len
-                last_packet_t = now()
+
+            # Read requested file and send in packets
+            while len(window) > 0:
+                finished = []
+                # Manage packets in window
+                for key, info in window.items():
+                    packet, attempt, time, failed = info
+                    # Check transmission timeout (None for initial sending)
+                    if not failed and args.timeout <= now() - time:
+                        attempt += 1
+                        # Check if packet has been attempted the max number of times
+                        if attempt > args.attempts:
+                            # Print error and mark as failed
+                            print(f"Error: Failed to send packet #{packet.seq} to {dest[0]}:{dest[1]} after {args.attempts} attempts.")
+                            failed = True
+                        else:
+                            # Delay packet for sending rate
+                            last_packet_t = delay(args.rate, last_packet_t)
+                            send_frame(sock, forward_addr, local.addr(), dest, args.priority, packet)
+                            sent_packets += 1
+                            # Only display data packet for initial transmit
+                            if attempt == 1:
+                                packet.display(dest, True)
+                            else:
+                                dropped_packets += 1
+                        # Store updated information
+                        window[key] = (packet, attempt, now(), failed)
+
+                    try:
+                        # Try reading acknowledgement packet from socket
+                        data, remote = sock.recvfrom(10240)
+                        frame = Frame(data=data)
+                        ack = frame.getPacket()
+
+                        # Remove ack'ed data packet from window
+                        if ack.type == P_ACK:
+                            if ack.seq in window:
+                                finished.append(ack.seq)
+                    except BlockingIOError:
+                        pass
+
+                # Remove acknowledged packets from window and parse another
+                for s in finished:
+                    del window[s]
+                    seq += 1
+                    # Parse new packet to add to window
+                    packet = create_packet(f, args.length, seq)
+                    if packet is not None:
+                        window[seq] = (packet, 0, 0, False)
+                    else:
+                        seq -= 1
+
+                # Count number of failed packets in the window
+                failed_packets = sum([int(info[3]) for info in window.values()])
+
+                # If all packets in window have failed exit loop
+                if len(window) > 0 and failed_packets == len(window):
+                    print(f"Error: All {len(window)} packets in window have failed.")
+                    break
     else:
         # Requested file not found locally
         print(f"Error: File '{request.payload}' requested from {requester[0]}:{requester[1]} not found!")
 
     # Create final END packet, encode, and send over network
-    packet = Packet(type=b'E', sequence=seq)
-    sock.sendto(packet.encode(), host)
-    send_t = datetime.now().strftime('%Y-%m-%d %H:%M:%S.%f')[:22]
+    packet = send_frame(sock, forward_addr, local.addr(), dest, args.priority, Packet(type=P_END, sequence=seq))
     # Dsiplay END packet information
-    print(
-f"""{packet.type_str()} Packet
-    Send Time-------: {send_t}
-    Request Address-: {host[0]}:{host[1]}
-    Sequence Number-: {seq}
-    Payload (4B)----: '{packet.payload[:4]}'
-""")
+    packet.display(dest, True)
+
+    # Display packet loss percentage
+    packet_loss = dropped_packets / sent_packets
+    print(f"\nPacket lost: {packet_loss:.2f}%")
 
     sock.close()
 
@@ -125,7 +142,7 @@ def parse_args():
         description=textwrap.dedent(
             f"""
             UW-Madison CS640 Fall 2024
-            Project 1 : Distributed File Transfer
+            Project 2: Network Emulator and Reliable Transfer
 
             Sender Program
                 Works as a server that recieves a request
@@ -193,10 +210,66 @@ def parse_args():
     )
 
     parser.add_argument(
+        "-f",
+        "--forward-host",
+        metavar="<hostname>",
+        dest="forward_host",
+        action="store",
+        type=str,
+        required=True,
+        help="Host name of initial packet forwarding emulator",
+    )
+
+    parser.add_argument(
+        "-e",
+        "--forward-port",
+        metavar="<port>",
+        dest="forward_port",
+        action="store",
+        type=int,
+        required=True,
+        help="Port of initial packet forwarding emulator",
+    )
+
+    parser.add_argument(
+        "-i",
+        "--priority",
+        metavar="<N>",
+        dest="priority",
+        action="store",
+        type=int,
+        default=3,
+        choices=range(1,4),
+        help="Packet priority [1,2,3]",
+    )
+
+    parser.add_argument(
         "-t",
         "--timeout",
-        metavar="<sec>",
+        metavar="<milliseconds>",
         dest="timeout",
+        action="store",
+        type=int,
+        default=300000,
+        help="Packet acknowledgement timeout (default 5 minutes)",
+    )
+
+    parser.add_argument(
+        "-a",
+        "--attempts",
+        metavar="<N>",
+        dest="attempts",
+        action="store",
+        type=int,
+        default=5,
+        help="Max number of attempts to send a packet",
+    )
+
+    parser.add_argument(
+        "-z",
+        "--socket-timeout",
+        metavar="<sec>",
+        dest="socket_timeout",
         action="store",
         type=int,
         default=None,
@@ -221,12 +294,24 @@ def check_args(args):
         print(f"Error: Invalid sequence number ({args.sequence_no}) sepcified. Must be a positive integer")
         invalid_args = True
 
-    if args.my_port <= 2049 or args.my_port >= 65536:
+    if args.timeout <= 0:
+        print(f"Error: Invalid packet ack timeout ({args.timeout}). Must be non-zero positive integer.")
+        invalid_args = True
+
+    if args.attempts <= 0:
+        print(f"Error: Invalid max send packet attempts ({args.attempts}). Must be non-zero positive integer.")
+        invalid_args = True
+
+    if not is_valid_port(args.my_port):
         print(f"Error: Invalid port specified ({args.my_port}). Out of range 2049 < p < 65536")
         invalid_args = True
 
-    if args.requester_port <= 2049 or args.requester_port >= 65536:
+    if not is_valid_port(args.requester_port):
         print(f"Error: Invalid requester port specified ({args.requester_port}). Out of range 2049 < p < 65536")
+        invalid_args = True
+
+    if not is_valid_port(args.forward_port):
+        print(f"Error: Invalid emulator port specified ({args.forward_port}). Out of range 2049 < p < 65536")
         invalid_args = True
 
     if invalid_args:

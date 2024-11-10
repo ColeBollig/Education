@@ -1,6 +1,6 @@
 # CS640 Programming Assignment 2: Network Emulator and Reliable Transfer
 
-Due: **Nov 17, 2023**
+Due: **Nov 15, 2023**
 
 ## 1. Overview
 
@@ -146,8 +146,6 @@ The behavior of the sender should be modified to:
 2. Increment the sequence number by 1 for each packet sent, instead of by the packet length
 3. Print out the observed percentage of packets lost. The loss rate that the sender prints out is not necessarily the same as the loss rate that we identify in the forwarding table since the sender might miss some ACKs. This loss rate is computed by (number of retransmissions / total number of transmissions), where total number of transmissions including both normal transmissions and retransmissions.
 4. The end packet is sent after ensuring that all data packets have been received by the receiver (or if max number of retries have reached for sending all packets in the last window).
-
-__*The sending rate will be reduced if the loss probability is above 50%*__
 
 #### Requester:
 

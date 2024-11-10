@@ -3,9 +3,7 @@
 import sys
 import os
 import socket
-import struct
-from time import time
-from datetime import datetime
+from networking import *
 import argparse
 import textwrap
 
@@ -15,66 +13,19 @@ __email__ = "cabollig@wisc.edu"
 TRACKER_FILE = "tracker.txt"
 
 #------------------------------------------------------------------
-def now():
-    """Get timestamp in milliseconds"""
-    return time() * 1000
-
-#------------------------------------------------------------------
-# Class that represents a remote host (Sender)
-class Host:
-    def __init__(self, hostname, port, size):
-        self.hostname = hostname
-        self.host = socket.gethostbyname(hostname)
-        self.port = int(port)
-        self.size = int(size)
-        if self.port <= 2049 or self.port >= 65536:
-            raise RuntimeError(f"Invalid port number ({self.port}). Out of range 2049 < p < 65536")
-    # Allow conversion to string for debugging
-    def __str__(self) -> str:
-        return f"{self.hostname}({self.host}:{self.port}) | {self.size}"
-    # Return a socket address tuple (IP, Port)
-    def addr(self) -> tuple:
-        return (self.host, self.port)
-
-#------------------------------------------------------------------
-# Class representing a Packet
-class Packet:
-    def __init__(self, **kwargs):
-        self.type = kwargs.get("type", b'-')
-        self.payload = kwargs.get("payload", "")
-        self.seq = kwargs.get("sequence", 0)
-        self.len = 0 if self.type != b'D' else len(self.payload)
-    # Encode a the packet to transmit over the network
-    def encode(self):
-        return struct.pack("!cII", self.type, socket.htonl(self.seq), socket.htonl(self.len)) + self.payload.encode()
-    # Decode a transmitted network packet
-    def decode(self, data):
-        header = data[:9]
-        self.payload = data[9:].decode()
-        header = struct.unpack("!cII", header)
-        self.type = header[0]
-        self.seq = socket.ntohl(header[1])
-        self.len = socket.ntohl(header[2])
-    # Allow string conversion for debugging
-    def __str__(self):
-        return f"[{str(self.type)}|{self.seq}|{len(self.payload)}|'{self.payload}']"
-    # Return full Packet type name from single character representation
-    def type_str(self):
-        PACKET_TYPES = {b'R' : "REQUEST", b'D' : "DATA", b'E' : "END"}
-        return PACKET_TYPES.get(self.type, "UNKNOWN")
-
-#------------------------------------------------------------------
 # Class to collect data transfer information from remote sender
 class Summary:
-    def __init__(self, host, port, expected):
-        self.host = host
-        self.port = port
+    def __init__(self, addr: tuple):
+        self.host = addr[0]
+        self.port = addr[1]
         self.start_t = now()
         self.end_t = None
+        self.done = False
         self.last_t = None
         self.num_data_packets = 0
         self.bytes_rec = 0
-        self.bytes_expected = expected
+    def packet(self):
+        self.num_data_packets += 1
     # Count bytes recieved from sender and increment number of recieved data packets
     def count(self, b: int):
         self.num_data_packets += 1
@@ -82,75 +33,97 @@ class Summary:
     # Mark that sender sent END packet
     def finished(self):
         self.end_t = now()
-    # Return the percent of bytes recieved from sender
-    def percent(self):
-        return (self.bytes_rec / self.bytes_expected) * 100
+        self.done = True
     # Convert to string to display summary output
     def __str__(self):
         total_t = self.end_t - self.start_t
-        packets_per_sec = round(self.num_data_packets / (total_t / 1000))
+        packets_per_sec = round((self.num_data_packets / (total_t / 1000)))
         return (
 f"""SUMMARY
     Sender Address-------: {self.host}:{self.port}
     Total Data Packets---: {self.num_data_packets}
-    Total Bytes Revieved-: {self.bytes_rec}B (Expected {self.bytes_expected}B)
+    Total Bytes Revieved-: {self.bytes_rec}B
     Avg Packets/Second---: {packets_per_sec} p/s
     Test Duration--------: {total_t:.2f} ms
 """)
+
+#------------------------------------------------------------------
+def acknowledgement(sock: socket.socket, addr: tuple, src: tuple, dest: tuple, seq: int):
+    """Send acknowledgment to sending host"""
+    send_frame(sock, addr, src, dest, PRIO_HIGH, Packet(type=P_ACK, sequence=seq))
 
 #------------------------------------------------------------------
 def request_files(args, tracker):
     """Retrieve requested files from senders"""
     # setup socket
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    sock.settimeout(args.timeout)
+    sock.settimeout(args.socket_timeout)
     sock.bind(('', args.my_port))
+
+    sock.setblocking(False)
+
+    # Set up local host and forwarding emulator host information
+    local = get_local_host(args.my_port)
+    forward_addr = (socket.gethostbyname(args.forward_host), args.forward_port)
 
     # Retrieve each specified file
     for filename in args.files:
-        f = open(filename, "w")
         # Create request packet to send to each Sender
-        request = Packet(type=b'R', payload=filename)
-        # For each sender in order
+        request = Packet(type=P_REQUEST, payload=filename, length=args.window)
+        # Setup summary result per sender
+        results = {sender.addr() : Summary(sender.addr()) for sender in tracker[filename].values()}
+        # Setup data structure to hold recieved data packets per sender
+        packets = {sender.addr() : dict() for sender in tracker[filename].values()}
+
+        # Send request packet to each sender
         for sender in tracker[filename].values():
-            result = None
             # Send request for sender
-            sock.sendto(request.encode(), sender.addr())
-            # Listen on socket for DATA->END packets
-            while True:
-                percentage = ""
-                packet = Packet()
-                # Recieve a packet
-                data, host = sock.recvfrom(10240)
-                if result is None:
-                    # Set up Summary once first packet is recieved
-                    result = Summary(host[0], host[1], sender.size)
-                recieve_t = datetime.now().strftime('%Y-%m-%d %H:%M:%S.%f')[:22]
-                # Decode tramsmitted network packet
-                packet.decode(data)
-                # Count DATA packet bytes
-                if packet.type == b'D':
-                    result.count(packet.len)
-                    percentage = f"\n    Data Recieved---: {result.percent():.2f}%"
-                    # Write retrieved DATA to local file
-                    f.write(packet.payload)
-                # Print retrieved packet information
-                four_bytes = packet.payload[:4].replace("\n", "\\n")
-                print(
-f"""{packet.type_str()} Packet
-    Recieve Time----: {recieve_t}
-    Sender Address--: {host[0]}:{host[1]}
-    Sequence Number-: {packet.seq}
-    Length----------: {packet.len}
-    Payload (4B)----: '{four_bytes}'{percentage}
-""")
-                # Check if end packet to stop listening for this sender
-                if packet.type == b'E':
-                    result.finished()
+            send_frame(sock, forward_addr, local.addr(), sender.addr(), PRIO_HIGH, request)
+
+        # Listen on socket for DATA->END packets
+        while True:
+            try:
+                # Check if all senders have sent an END packet
+                done = sum([int(result.done) for result in results.values()])
+                if done == len(results):
                     break
-            # Output summary of retrieved data from sender
-            print(f"{result}")
-        f.close()
+
+                # Recieve a data
+                data, remote = sock.recvfrom(10240)
+                # Decode tramsitted frame
+                frame = Frame(data=data)
+                # Verify this frame belongs here (i.e. dest host equals local host)
+                assert frame.getDestAddr() == local.addr()
+                # Get frame source address
+                src_addr = frame.getSrcAddr()
+                # Extract inner packet from fram
+                packet = frame.getPacket()
+
+                # If END packet: display, update and print summary
+                if packet.is_end():
+                    packet.display(src_addr)
+                    results[src_addr].finished()
+                    print(str(results[src_addr]))
+                # If DATA packet: send ack, check if already stored (store if not already recieved)
+                elif packet.is_data():
+                    acknowledgement(sock, forward_addr, local.addr(), src_addr, packet.seq)
+                    if packet.seq not in packets[src_addr]:
+                        packets[src_addr][packet.seq] = packet
+                        results[src_addr].count(packet.len)
+                    else:
+                        results[src_addr].packet()
+
+            except BlockingIOError:
+                pass
+
+        # Write all data packets (Sender order: Sequence order)
+        with open(filename, "w") as f:
+            for host, portion in packets.items():
+                order = sorted(portion.keys())
+                portion = {seq : portion[seq] for seq in order}
+                for packet in portion.values():
+                    #packet.display(host)
+                    f.write(packet.payload)
     sock.close()
 
 #------------------------------------------------------------------
@@ -172,14 +145,14 @@ def get_tracking_info():
             if line == "" or line[0] == "#":
                 continue
             try:
-                filename, ID, hostname, port, size = line.strip().split(" ")
-                #print(f"Parsed: '{filename}' '{ID}' '{hostname}' '{port}' '{size}'")
+                filename, ID, hostname, port = line.strip().split(" ")
+                #print(f"Parsed: '{filename}' '{ID}' '{hostname}' '{port}'")
                 if filename in TRACKER:
                     if ID in TRACKER[filename]:
                         raise RuntimeError(f"ID {ID} specified multiple times")
                 else:
                     TRACKER[filename] = dict()
-                file_portion = { ID : Host(hostname, port, size.replace("B", "")) }
+                file_portion = { ID : Host(hostname, port) }
                 TRACKER[filename].update(file_portion)
             except Exception as e:
                 print(f"Error: Failed to parse {TRACKER_FILE} (@{line_no}): {e}")
@@ -201,7 +174,7 @@ def parse_args():
         description=textwrap.dedent(
             f"""
             UW-Madison CS640 Fall 2024
-            Project 1 : Distributed File Transfer
+            Project 2: Network Emulator and Reliable Transfer
 
             Requester Program
                 Provided files, the requester program will
@@ -236,10 +209,43 @@ def parse_args():
     )
 
     parser.add_argument(
-        "-t",
-        "--timeout",
+        "-f",
+        "--forward-host",
+        metavar="<hostname>",
+        dest="forward_host",
+        action="store",
+        type=str,
+        required=True,
+        help="Host name of initial packet forwarding emulator",
+    )
+
+    parser.add_argument(
+        "-e",
+        "--forward-port",
+        metavar="<port>",
+        dest="forward_port",
+        action="store",
+        type=int,
+        required=True,
+        help="Port of initial packet forwarding emulator",
+    )
+
+    parser.add_argument(
+        "-w",
+        "--window",
+        metavar="<size>",
+        dest="window",
+        action="store",
+        type=int,
+        default=10,
+        help="Number of packets per sending window",
+    )
+
+    parser.add_argument(
+        "-z",
+        "--socket-timeout",
         metavar="<sec>",
-        dest="timeout",
+        dest="socket_timeout",
         action="store",
         type=int,
         default=None,
@@ -253,8 +259,12 @@ def check_args(args, tracker):
     """Verify provided arguments are valid"""
     invalid_args = False
 
-    if args.my_port <= 2049 or args.my_port >= 65536:
+    if not is_valid_port(args.my_port):
         print(f"Error: Invalid port specified ({args.my_port}). Out of range 2049 < p < 65536")
+        invalid_args = True
+
+    if not is_valid_port(args.forward_port):
+        print(f"Error: Invalid emulator port specified ({args.forward_port}). Out of range 2049 < p < 65536")
         invalid_args = True
 
     for filename in args.files:

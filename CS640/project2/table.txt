@@ -1,0 +1,20 @@
+# Emulator 1 6000
+Coles-MacBook-Pro.local 6000 Coles-MacBook-Pro.local 5001 Coles-MacBook-Pro.local 6001 100 10
+Coles-MacBook-Pro.local 6000 Coles-MacBook-Pro.local 5002 Coles-MacBook-Pro.local 6001 50 10
+Coles-MacBook-Pro.local 6000 Coles-MacBook-Pro.local 5003 Coles-MacBook-Pro.local 6001 200 10
+Coles-MacBook-Pro.local 6000 Coles-MacBook-Pro.local 9618 Coles-MacBook-Pro.local 9618 0 10
+
+# Emulator 2 6001
+Coles-MacBook-Pro.local 6001 Coles-MacBook-Pro.local 5001 Coles-MacBook-Pro.local 6002 0 10
+Coles-MacBook-Pro.local 6001 Coles-MacBook-Pro.local 5002 Coles-MacBook-Pro.local 6002 10 10
+Coles-MacBook-Pro.local 6001 Coles-MacBook-Pro.local 5003 Coles-MacBook-Pro.local 5003 20 10
+Coles-MacBook-Pro.local 6001 Coles-MacBook-Pro.local 9618 Coles-MacBook-Pro.local 6000 75 10
+
+# Emulator 3 6002
+Coles-MacBook-Pro.local 6002 Coles-MacBook-Pro.local 5001 Coles-MacBook-Pro.local 5001 0 10
+Coles-MacBook-Pro.local 6002 Coles-MacBook-Pro.local 5002 Coles-MacBook-Pro.local 5002 0 10
+Coles-MacBook-Pro.local 6002 Coles-MacBook-Pro.local 9618 Coles-MacBook-Pro.local 6001 300 10
+
+# One Emulator testing 6000
+#Coles-MacBook-Pro.local 6000 Coles-MacBook-Pro.local 5001 Coles-MacBook-Pro.local 5001 0 0
+#Coles-MacBook-Pro.local 6000 Coles-MacBook-Pro.local 9618 Coles-MacBook-Pro.local 9618 0 0
