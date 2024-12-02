@@ -50,7 +50,7 @@ f"""SUMMARY
 #------------------------------------------------------------------
 def acknowledgement(sock: socket.socket, addr: tuple, src: tuple, dest: tuple, seq: int):
     """Send acknowledgment to sending host"""
-    send_frame(sock, addr, src, dest, PRIO_HIGH, Packet(type=P_ACK, sequence=seq))
+    send_frame(sock, addr, src, dest, Packet(type=P_ACK, sequence=seq))
 
 #------------------------------------------------------------------
 def request_files(args, tracker):
@@ -64,7 +64,8 @@ def request_files(args, tracker):
 
     # Set up local host and forwarding emulator host information
     local = get_local_host(args.my_port)
-    forward_addr = (socket.gethostbyname(args.forward_host), args.forward_port)
+    forward = Host(args.forward_host, args.forward_port)
+    send_frame(sock, forward.addr(), local.addr(), forward.addr(), Packet(type=P_HELLO))
 
     # Retrieve each specified file
     for filename in args.files:
@@ -78,7 +79,7 @@ def request_files(args, tracker):
         # Send request packet to each sender
         for sender in tracker[filename].values():
             # Send request for sender
-            send_frame(sock, forward_addr, local.addr(), sender.addr(), PRIO_HIGH, request)
+            send_frame(sock, forward.addr(), local.addr(), sender.addr(), request)
 
         # Listen on socket for DATA->END packets
         while True:
@@ -106,7 +107,7 @@ def request_files(args, tracker):
                     print(str(results[src_addr]))
                 # If DATA packet: send ack, check if already stored (store if not already recieved)
                 elif packet.is_data():
-                    acknowledgement(sock, forward_addr, local.addr(), src_addr, packet.seq)
+                    acknowledgement(sock, forward.addr(), local.addr(), src_addr, packet.seq)
                     if packet.seq not in packets[src_addr]:
                         packets[src_addr][packet.seq] = packet
                         results[src_addr].count(packet.len)
@@ -174,7 +175,7 @@ def parse_args():
         description=textwrap.dedent(
             f"""
             UW-Madison CS640 Fall 2024
-            Project 2: Network Emulator and Reliable Transfer
+            Project 3: Link State Protocol and Trace Route
 
             Requester Program
                 Provided files, the requester program will

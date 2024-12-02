@@ -17,7 +17,7 @@ def now() -> int:
     return time() * 1000
 
 #------------------------------------------------------------------
-def delay(rate: int, start: int = None):
+def delay(rate: int, start: int = None) -> int:
     start = now() if start is None else start
     delay = (1000 / rate)
     while now() - start < delay:
@@ -25,23 +25,28 @@ def delay(rate: int, start: int = None):
     return now()
 
 #------------------------------------------------------------------
-def is_valid_port(port: int):
+def is_valid_port(port: int) -> bool:
     return port > 2049 and port < 65536
 
 #------------------------------------------------------------------
 # Class that represents a host provided a hostname and port
 class Host:
-    def __init__(self, hostname, port):
-        self.hostname = hostname
-        self.host = socket.gethostbyname(hostname)
+    def __init__(self, identifier, port):
+        try:
+            socket.inet_aton(identifier)
+            self.hostname = "no-hostname"
+            self.host = identifier
+        except socket.error:
+            self.hostname = identifier
+            self.host = socket.gethostbyname(identifier)
         self.port = int(port)
         if not is_valid_port(self.port):
             raise RuntimeError(f"Invalid port number ({self.port}). Out of range 2049 < p < 65536")
     # Make class hashable for acting as key in dictionary
-    def __hash__(self):
+    def __hash__(self) -> hash:
         return hash(self.addr())
     # Allow comaprison to other Host or tuple of (ipv4, port)
-    def __eq__(self, other):
+    def __eq__(self, other) -> bool:
         return self.addr() == other.addr() if isinstance(other, Host) else (self.addr() == other if isinstance(other, tuple) else False)
     # Allow conversion to string for debugging
     def __str__(self) -> str:
@@ -49,7 +54,9 @@ class Host:
     # Return a socket address tuple (IP, Port)
     def addr(self) -> tuple:
         return (self.host, self.port)
-    def str(self):
+    def ip(self) -> str:
+        return self.host
+    def str(self) -> str:
         return f"{self.host}:{self.port}"
 
 #------------------------------------------------------------------
@@ -57,10 +64,57 @@ def get_local_host(port: int) -> Host:
     return Host(socket.gethostname(), port)
 
 #------------------------------------------------------------------
+LSP_DO_NOTHING = 0
+LSP_FORWARD = 1
+LSP_UPDATE_SENDER = 2
+
+#------------------------------------------------------------------
+class LinkState():
+    def __init__(self, **kwargs):
+        data = kwargs.get("data")
+        if data is not None:
+            self.decode(data)
+        else:
+            self.orig_ip = kwargs["ip"]
+            self.orig_port = kwargs["port"]
+            self.seq = kwargs.get("sequence", 0)
+            self.ttl = kwargs["ttl"]
+            self.links = kwargs["links"]
+    def encode(self):
+        header = struct.pack(
+            "!4sHII",
+            socket.inet_aton(self.orig_ip),
+            socket.htons(self.orig_port),
+            socket.htonl(self.seq),
+            socket.htonl(self.ttl),
+        )
+        return header + self.links.encode()
+    def decode(self, data):
+        header = data[:14]
+        self.links = data[14:].decode()
+        header = struct.unpack("!4sHII", header)
+        self.orig_ip = socket.inet_ntoa(header[0])
+        self.orig_port = socket.ntohs(header[1])
+        self.seq = socket.ntohl(header[2])
+        self.ttl = socket.ntohl(header[3])
+    def expired(self) -> bool:
+        return self.ttl == 0
+    def decay(self):
+        if self.ttl > 0:
+            self.ttl -= 1
+    def host(self) -> Host:
+        return Host(self.orig_ip, self.orig_port)
+    def __str__(self):
+        return f"[{self.orig_ip}:{self.orig_port}|{self.seq}|{self.ttl}|'{self.links}']"
+
+#------------------------------------------------------------------
 P_REQUEST = b'R'
 P_DATA = b'D'
 P_END = b'E'
 P_ACK = b'A'
+P_HELLO = b'H'
+P_LINK = b'L'
+P_TRACE = b'T'
 P_UNDEF = b'-'
 
 #------------------------------------------------------------------
@@ -69,6 +123,9 @@ PACKET_TYPE = {
     P_DATA : "DATA",
     P_END : "END",
     P_ACK : "ACKNOWLEDGEMENT",
+    P_HELLO : "HELLO",
+    P_LINK : "LINK-STATE",
+    P_TRACE : "TRACE-ROUTE",
     P_UNDEF : "UNDEFINED",
 }
 
@@ -87,13 +144,25 @@ class Packet:
         self.send_t = None
         self.recieve_t = None
         self.create_t = timestamp()
-    def is_end(self):
+    # Check if a packet represents an END packet
+    def is_end(self) -> bool:
         return self.type == P_END
     # Check if packet represents a DATA packet
-    def is_data(self):
+    def is_data(self) -> bool:
         return self.type == P_DATA
-    def is_droppable(self):
+    # Check if packet represents a HELLO packet
+    def is_hello(self) -> bool:
+        return self.type == P_HELLO
+    # Check if packet represents a TRACE (Route) packet
+    def is_trace_route(self) -> bool:
+        return self.type == P_TRACE
+    # Check if packet represents a LINK (State) packet
+    def is_link_state(self) -> bool:
+        return self.type == P_LINK
+    def is_droppable(self) -> bool:
         return self.type != P_REQUEST and self.type != P_END
+    def _encode_payload(self):
+        return self.type not in [P_LINK]
     # Encode the Packet to transmit over network
     def encode(self):
         self.send_t = timestamp()
@@ -103,16 +172,16 @@ class Packet:
             socket.htonl(self.seq),
             socket.htonl(self.len)
         )
-        return header + self.payload.encode()
+        return header + (self.payload.encode() if self._encode_payload() else self.payload)
     # Decode a transmitted network packet
     def decode(self, data):
         self.recieve_t = timestamp()
         header = data[:9]
-        self.payload = data[9:].decode()
         header = struct.unpack("!cII", header)
         self.type = header[0]
         self.seq = socket.ntohl(header[1])
         self.len = socket.ntohl(header[2])
+        self.payload = (data[9:].decode() if self._encode_payload() else data[9:])
     def display(self, host: tuple = ("???.???.???.???", "????"), sender: bool = False):
         time = f"Creation Time---: {self.create_t}"
         if self.recieve_t is not None:
@@ -130,7 +199,7 @@ f"""{self.type_str()} Packet
     Payload (4B)----: '{four_bytes}'
 """)
     # Allow conversion into a string type for debugging
-    def __str__(self):
+    def __str__(self) -> str:
         payload = self.payload.replace("\n", "\\n")
         return f"[{self.type}|{self.seq}|{self.len}/{len(self.payload)}|'{payload}']"
     # Return full Packet type name from single character representation
@@ -146,18 +215,12 @@ def packet_type(payload: str) -> str:
         return "UNKNOWN"
 
 #------------------------------------------------------------------
-PRIO_HIGH = 0x01
-PRIO_MEDIUM = 0x02
-PRIO_LOW = 0x03
-
-#------------------------------------------------------------------
 class Frame:
     def __init__(self, **kwargs):
         data = kwargs.get("data")
         if data is not None:
             self.decode(data)
         else:
-            self.priority = kwargs.get("priority", PRIO_HIGH)
             src = kwargs.get("source")
             if src is not None:
                 self.src_ip = src[0]
@@ -176,47 +239,37 @@ class Frame:
             self.len = len(self.payload)
     def encode(self):
         header = struct.pack(
-            "!B4sH4sHI",
-            self.priority,
+            "!4sH4sHI",
             socket.inet_aton(self.src_ip),
             socket.htons(self.src_port),
             socket.inet_aton(self.dest_ip),
             socket.htons(self.dest_port),
-            socket.htonl(self.len)
+            socket.htonl(self.len),
         )
         return header + self.payload
     def decode(self, data):
-        header = data[:17]
-        self.payload = data[17:]
-        header = struct.unpack("!B4sH4sHI", header)
-        self.priority = header[0]
-        self.src_ip = socket.inet_ntoa(header[1])
-        self.src_port = socket.ntohs(header[2])
-        self.dest_ip = socket.inet_ntoa(header[3])
-        self.dest_port = socket.ntohs(header[4])
-        self.len = socket.ntohl(header[5])
+        header = data[:16]
+        self.payload = data[16:]
+        header = struct.unpack("!4sH4sHI", header)
+        self.src_ip = socket.inet_ntoa(header[0])
+        self.src_port = socket.ntohs(header[1])
+        self.dest_ip = socket.inet_ntoa(header[2])
+        self.dest_port = socket.ntohs(header[3])
+        self.len = socket.ntohl(header[4])
     def getPacket(self) -> Packet:
         return Packet(data=self.payload)
     def getSrcAddr(self) -> tuple:
         return (self.src_ip, self.src_port)
     def getDestAddr(self) -> tuple:
         return (self.dest_ip, self.dest_port)
-    def prio_str(self) -> str:
-        if self.priority == PRIO_HIGH:
-            return f"high priority (0x{PRIO_HIGH:x})"
-        elif self.priority == PRIO_MEDIUM:
-            return f"medium priority (0x{PRIO_MEDIUM:x})"
-        elif self.priority == PRIO_LOW:
-            return f"low priority (0x{PRIO_LOW:x})"
-        raise RuntimeError(f"Unknown frame priority: 0x{self.priority:x}")
-    def __str__(self):
+    def __str__(self) -> str:
         payload = str(self.payload).replace("\n", "\\n")
         source = f"{self.src_ip}:{self.src_port}"
         destination = f"{self.dest_ip}:{self.dest_port}"
-        return f"[0x{self.priority:x}|{source}|{destination}|{self.len}/{len(self.payload)}|'{payload}']"
+        return f"[{source}|{destination}|{self.len}/{len(self.payload)}|'{payload}']"
 
 #------------------------------------------------------------------
-def send_frame(sock: socket.socket, addr: tuple, src: tuple, dest:tuple, prio: int, packet: Packet):
-    frame = Frame(priority=prio, source=src, destination=dest, payload=packet.encode())
+def send_frame(sock: socket.socket, addr: tuple, src: tuple, dest:tuple, packet: Packet) -> Packet:
+    frame = Frame(source=src, destination=dest, payload=packet.encode())
     sock.sendto(frame.encode(), addr)
     return packet

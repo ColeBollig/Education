@@ -24,6 +24,10 @@ def handle_requests(args):
     sock.settimeout(args.socket_timeout)
     sock.bind(('', args.my_port))
 
+    local = get_local_host(args.my_port)
+    forward = Host(args.forward_host, args.forward_port)
+    send_frame(sock, forward.addr(), local.addr(), forward.addr(), Packet(type=P_HELLO))
+
     # Variables to manage request information
     requester = None
     request = None
@@ -39,8 +43,6 @@ def handle_requests(args):
     sock.setblocking(False)
 
     # Variables for sending DATA packets back to requester
-    local = get_local_host(args.my_port)
-    forward_addr = (socket.gethostbyname(args.forward_host), args.forward_port)
     dest = (requester[0], int(args.requester_port))
     sent_packets = 0
     dropped_packets = 0
@@ -77,7 +79,7 @@ def handle_requests(args):
                         else:
                             # Delay packet for sending rate
                             last_packet_t = delay(args.rate, last_packet_t)
-                            send_frame(sock, forward_addr, local.addr(), dest, args.priority, packet)
+                            send_frame(sock, forward.addr(), local.addr(), dest, packet)
                             sent_packets += 1
                             # Only display data packet for initial transmit
                             if attempt == 1:
@@ -123,7 +125,7 @@ def handle_requests(args):
         print(f"Error: File '{request.payload}' requested from {requester[0]}:{requester[1]} not found!")
 
     # Create final END packet, encode, and send over network
-    packet = send_frame(sock, forward_addr, local.addr(), dest, args.priority, Packet(type=P_END, sequence=seq))
+    packet = send_frame(sock, forward.addr(), local.addr(), dest, Packet(type=P_END, sequence=seq))
     # Dsiplay END packet information
     packet.display(dest, True)
 
@@ -142,7 +144,7 @@ def parse_args():
         description=textwrap.dedent(
             f"""
             UW-Madison CS640 Fall 2024
-            Project 2: Network Emulator and Reliable Transfer
+            Project 3: Link State Protocol and Trace Route
 
             Sender Program
                 Works as a server that recieves a request
@@ -229,18 +231,6 @@ def parse_args():
         type=int,
         required=True,
         help="Port of initial packet forwarding emulator",
-    )
-
-    parser.add_argument(
-        "-i",
-        "--priority",
-        metavar="<N>",
-        dest="priority",
-        action="store",
-        type=int,
-        default=3,
-        choices=range(1,4),
-        help="Packet priority [1,2,3]",
     )
 
     parser.add_argument(
